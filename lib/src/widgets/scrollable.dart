@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
@@ -21,26 +23,78 @@ import './viewport.dart';
 class HSScrollable extends StatefulWidget {
   const HSScrollable({
     Key? key,
-    this.axis = Axis.vertical,
+    this.axisDirection = AxisDirection.down,
+    this.scrollBehavior,
+    this.physics,
+    this.controller,
+    this.dragStartBehavior = DragStartBehavior.start,
   }) : super(key: key);
 
-  final Axis axis;
+  final AxisDirection axisDirection;
+
+  final ScrollBehavior? scrollBehavior;
+
+  final ScrollPhysics? physics;
+
+  final ScrollController? controller;
+
+  final DragStartBehavior dragStartBehavior;
 
   @override
   State<StatefulWidget> createState() => HSScrollableState();
 }
 
-class HSScrollableState extends State<HSScrollable> {
+// TODO: use our own ScrollContext
+class HSScrollableState extends State<HSScrollable> implements ScrollContext {
   final GlobalKey _ignorePointerKey = GlobalKey();
 
   bool _shouldIgnorePointer = false;
 
   late Map<Type, GestureRecognizerFactory> gestureRecognizers;
 
+  late ScrollBehavior _configuration;
+  ScrollPhysics? _physics;
+
+  ScrollPosition? _position;
+  ScrollPosition get position => _position!;
+
+  ScrollController? _fallbackController;
+  ScrollController get controller => widget.controller ?? _fallbackController!;
+
   @override
   void initState() {
+    if (widget.controller == null) {
+      _fallbackController = ScrollController();
+    }
     super.initState();
+  }
+
+  @override
+  void didChangeDependencies() {
+    setPosition();
     setGestures();
+    super.didChangeDependencies();
+  }
+
+  void setPosition() {
+    _configuration = widget.scrollBehavior ?? ScrollConfiguration.of(context);
+    _physics = _configuration.getScrollPhysics(context);
+    if (widget.physics != null) {
+      _physics = widget.physics!.applyTo(_physics);
+    } else if (widget.scrollBehavior != null) {
+      _physics =
+          widget.scrollBehavior!.getScrollPhysics(context).applyTo(_physics);
+    }
+    final oldPosition = _position;
+    if (oldPosition != null) {
+      controller.detach(oldPosition);
+      scheduleMicrotask(oldPosition.dispose);
+    }
+
+    // TODO: change this type
+    _position = controller.createScrollPosition(_physics!, this, oldPosition);
+    assert(_position != null);
+    controller.attach(position);
   }
 
   void setGestures() {
@@ -54,7 +108,13 @@ class HSScrollableState extends State<HSScrollable> {
             ..onStart = _handleDragStart
             ..onUpdate = _handleDragUpdate
             ..onEnd = _handleDragEnd
-            ..onCancel = _handleDragCancel;
+            ..onCancel = _handleDragCancel
+            ..minFlingDistance = _physics?.minFlingDistance
+            ..minFlingDistance = _physics?.minFlingVelocity
+            ..maxFlingVelocity = _physics?.maxFlingVelocity
+            ..velocityTrackerBuilder =
+                _configuration.velocityTrackerBuilder(context)
+            ..dragStartBehavior = widget.dragStartBehavior;
         },
       ),
       VerticalDragGestureRecognizer:
@@ -72,6 +132,62 @@ class HSScrollableState extends State<HSScrollable> {
     };
   }
 
+  bool _shouldUpdatePosition(HSScrollable oldWidget) {
+    var newPhysics =
+        widget.physics ?? widget.scrollBehavior?.getScrollPhysics(context);
+    var oldPhysics = oldWidget.physics ??
+        oldWidget.scrollBehavior?.getScrollPhysics(context);
+    do {
+      if (newPhysics?.runtimeType != oldPhysics?.runtimeType) {
+        return true;
+      }
+      newPhysics = newPhysics?.parent;
+      oldPhysics = oldPhysics?.parent;
+    } while (newPhysics != null || oldPhysics != null);
+
+    return widget.controller?.runtimeType != oldWidget.controller!.runtimeType;
+  }
+
+  @override
+  void didUpdateWidget(covariant HSScrollable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    if (widget.controller != oldWidget.controller) {
+      if (oldWidget.controller == null) {
+        assert(_fallbackController != null);
+        assert(widget.controller != null);
+        _fallbackController!.detach(position);
+        _fallbackController!.dispose();
+        _fallbackController == null;
+      } else {
+        oldWidget.controller?.detach(position);
+        if (widget.controller == null) {
+          _fallbackController = ScrollController();
+        }
+      }
+
+      controller.attach(position);
+    }
+
+    if (_shouldUpdatePosition(oldWidget)) {
+      setPosition();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (widget.controller != null) {
+      widget.controller!.detach(position);
+    } else {
+      _fallbackController?.detach(position);
+      _fallbackController?.dispose();
+    }
+
+    position.dispose();
+    super.dispose();
+  }
+
+  @override
   void setIgnorePointer(bool value) {
     if (_shouldIgnorePointer == value) {
       return;
@@ -106,4 +222,34 @@ class HSScrollableState extends State<HSScrollable> {
   void _handleDragUpdate(DragUpdateDetails details) {}
   void _handleDragEnd(DragEndDetails details) {}
   void _handleDragCancel() {}
+
+  @override
+  AxisDirection get axisDirection => widget.axisDirection;
+
+  @override
+  // TODO: implement notificationContext
+  BuildContext? get notificationContext => throw UnimplementedError();
+
+  @override
+  void saveOffset(double offset) {
+    // TODO: implement saveOffset
+  }
+
+  @override
+  void setCanDrag(bool value) {
+    // TODO: implement setCanDrag
+  }
+
+  @override
+  void setSemanticsActions(Set<SemanticsAction> actions) {
+    // TODO: implement setSemanticsActions
+  }
+
+  @override
+  // TODO: implement storageContext
+  BuildContext get storageContext => throw UnimplementedError();
+
+  @override
+  // TODO: implement vsync
+  TickerProvider get vsync => throw UnimplementedError();
 }
